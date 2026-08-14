@@ -5,6 +5,9 @@ from pandas.tseries.offsets import BDay
 from fpdf import FPDF
 import yfinance as yf
 
+# --- COLOQUE SEU TÓPICO DO NTFY AQUI DIRETAMENTE ---
+NTFY_TOPIC_FIXO = "Yeild_B3"
+
 # Lista de Tickers da B3 (adicionando o sufixo .SA para o Yahoo Finance)
 TICKERS_B3 = [
     "A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
@@ -146,9 +149,8 @@ TICKERS_B3 = [
 ]
 
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
-    """Envia uma notificação de texto simples para o ntfy.sh."""
-    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
-    url = f"https://ntfy.sh/{topico}"
+    """Envia uma notificação de texto simples para o ntfy.sh usando o tópico fixo."""
+    url = f"https://ntfy.sh/{NTFY_TOPIC_FIXO}"
 
     headers = {
         "Title": titulo,
@@ -156,10 +158,6 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
     }
     if tags:
         headers["Tags"] = tags
-
-    ntfy_token = os.getenv("NTFY_TOKEN")
-    if ntfy_token:
-        headers["Authorization"] = f"Bearer {ntfy_token}"
 
     try:
         response = requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
@@ -172,9 +170,8 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
 
 
 def enviar_pdf_ntfy(caminho_pdf, titulo):
-    """Envia um arquivo PDF como anexo para o ntfy.sh."""
-    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
-    url = f"https://ntfy.sh/{topico}"
+    """Envia um arquivo PDF como anexo para o ntfy.sh usando o tópico fixo."""
+    url = f"https://ntfy.sh/{NTFY_TOPIC_FIXO}"
 
     headers = {
         "Title": titulo,
@@ -182,10 +179,6 @@ def enviar_pdf_ntfy(caminho_pdf, titulo):
         "Priority": "high",
         "Tags": "file,chart_with_upwards_trend"
     }
-
-    ntfy_token = os.getenv("NTFY_TOKEN")
-    if ntfy_token:
-        headers["Authorization"] = f"Bearer {ntfy_token}"
 
     try:
         with open(caminho_pdf, "rb") as arquivo:
@@ -266,17 +259,10 @@ def buscar_proventos_yfinance(tickers):
                 preco_atual = hist['Close'].iloc[-1]
 
             for data_com, valor in dividends.items():
-                # Converte o índice de data do pandas para Timestamp limpo
                 data_com_ts = pd.to_datetime(data_com).tz_localize(None).normalize()
-                
-                # No Yahoo Finance, a data do índice de dividendos costuma representar a Data EX aproximada ou Data Com
-                # Tratando a data obtida como referência de Data EX / Data Com:
                 data_ex = data_com_ts
-                
-                # Estimativa de pagamento padrão caso o yfinance não traga a data exata de pagamento (geralmente 15 dias úteis depois)
                 data_pag = data_ex + BDay(15)
 
-                # Filtra do dia atual em diante
                 if data_ex >= hoje:
                     if data_ex.weekday() < 5 and data_pag.weekday() < 5:
                         dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
@@ -290,8 +276,7 @@ def buscar_proventos_yfinance(tickers):
                             "Preco Atual (R$)": float(preco_atual) if preco_atual else 0.0,
                             "DY (%)": dy,
                         })
-        except Exception as e:
-            # Ignora erros individuais de ativos que possam falhar no yfinance
+        except Exception:
             continue
 
     return pd.DataFrame(proventos_futuros)
