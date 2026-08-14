@@ -3,8 +3,9 @@ import requests
 import pandas as pd
 from pandas.tseries.offsets import BDay
 from fpdf import FPDF
+import yfinance as yf
 
-# Lista de Tickers da B3
+# Lista de Tickers da B3 (adicionando o sufixo .SA para o Yahoo Finance)
 TICKERS_B3 = [
     "A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
     "ABCB4.SA", "ABCP11.SA", "ABEV3.SA", "ABTT34.SA", "ACCN34.SA", "ACNB34.SA",
@@ -207,7 +208,7 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(5)
 
-    # Título das Colunas (Ajuste de Larguras para caber na página A4 de 190mm úteis)
+    # Título das Colunas
     pdf.set_font("Helvetica", style="B", size=10)
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(35, 8, "Ticker", border=1, align="C", fill=True)
@@ -239,87 +240,65 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     return caminho_saida
 
 
-def buscar_proventos_brapi_lote(tickers, token_brapi=None):
+def buscar_proventos_yfinance(tickers):
     """
-    Busca proventos futuros na BRAPI dividindo a lista em lotes.
+    Busca proventos utilizando exclusivamente a biblioteca yfinance.
     Filtra datas EX e Pagamento para garantir que sejam em dias úteis (Seg-Sex).
     """
     hoje = pd.Timestamp.today().normalize()
     proventos_futuros = []
 
-    tickers_limpos = list(set([t.replace(".SA", "") for t in tickers]))
-    tamanho_lote = 20
-    lotes = [
-        tickers_limpos[i : i + tamanho_lote]
-        for i in range(0, len(tickers_limpos), tamanho_lote)
-    ]
+    print(f"Buscando proventos via Yahoo Finance para {len(tickers)} ativos...")
 
-    print(f"Buscando proventos para {len(tickers_limpos)} ativos em {len(lotes)} requisições (BRAPI)...")
-
-    for lote in lotes:
-        tickers_str = ",".join(lote)
-        url = f"https://brapi.dev/api/quote/{tickers_str}?dividends=true"
-        if token_brapi:
-            url += f"&token={token_brapi}"
-
+    for ticker in tickers:
         try:
-            res = requests.get(url, timeout=15)
-            if res.status_code != 200:
-                print(f"Erro no lote ({res.status_code}): {tickers_str}")
+            ativo = yf.Ticker(ticker)
+            
+            # Pega o histórico de dividendos do Yahoo Finance
+            dividends = ativo.dividends
+            if dividends is None or dividends.empty:
                 continue
 
-            dados = res.json()
-            resultados = dados.get("results", [])
+            # Pega o preço atual para calcular o DY estimado
+            hist = ativo.history(period="1d")
+            preco_atual = None
+            if not hist.empty:
+                preco_atual = hist['Close'].iloc[-1]
 
-            for acao in resultados:
-                ticker_full = f"{acao.get('symbol')}.SA"
-                preco_atual = acao.get("regularMarketPrice")
+            for data_com, valor in dividends.items():
+                # Converte o índice de data do pandas para Timestamp limpo
+                data_com_ts = pd.to_datetime(data_com).tz_localize(None).normalize()
+                
+                # No Yahoo Finance, a data do índice de dividendos costuma representar a Data EX aproximada ou Data Com
+                # Tratando a data obtida como referência de Data EX / Data Com:
+                data_ex = data_com_ts
+                
+                # Estimativa de pagamento padrão caso o yfinance não traga a data exata de pagamento (geralmente 15 dias úteis depois)
+                data_pag = data_ex + BDay(15)
 
-                cash_dividends = acao.get("dividendsData", {}).get("cashDividends", [])
+                # Filtra do dia atual em diante
+                if data_ex >= hoje:
+                    if data_ex.weekday() < 5 and data_pag.weekday() < 5:
+                        dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
 
-                for item in cash_dividends:
-                    data_com_str = item.get("cutOffDate") or item.get("approvedOn")
-                    data_pag_str = item.get("paymentDate")
-
-                    if not data_com_str or not data_pag_str:
-                        continue
-
-                    # Converte para Timestamp
-                    data_com = pd.to_datetime(data_com_str).tz_localize(None)
-                    data_pag = pd.to_datetime(data_pag_str).tz_localize(None)
-
-                    # Calcula a Data EX como o próximo dia útil após a Data Com (BDay = Business Day)
-                    data_ex = data_com + BDay(1)
-
-                    # Filtra do dia atual em diante
-                    if data_ex >= hoje:
-                        # Verifica se Data EX e Data Pagamento são dias úteis (Segunda a Sexta = 0 a 4)
-                        if data_ex.weekday() < 5 and data_pag.weekday() < 5:
-                            
-                            valor = item.get("rate", 0)
-                            dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
-
-                            proventos_futuros.append({
-                                "Ticker": ticker_full,
-                                "Tipo": item.get("label", "Provento"),
-                                "Data EX": data_ex.strftime("%d/%m"),
-                                "Data Pagamento": data_pag.strftime("%d/%m"),
-                                "Valor (R$)": valor,
-                                "Preco Atual (R$)": preco_atual,
-                                "DY (%)": dy,
-                            })
-
+                        proventos_futuros.append({
+                            "Ticker": ticker,
+                            "Tipo": "Dividendo/JCP",
+                            "Data EX": data_ex.strftime("%d/%m"),
+                            "Data Pagamento": data_pag.strftime("%d/%m"),
+                            "Valor (R$)": float(valor),
+                            "Preco Atual (R$)": float(preco_atual) if preco_atual else 0.0,
+                            "DY (%)": dy,
+                        })
         except Exception as e:
-            print(f"Erro ao processar lote {tickers_str}: {e}")
+            # Ignora erros individuais de ativos que possam falhar no yfinance
+            continue
 
     return pd.DataFrame(proventos_futuros)
 
 
 if __name__ == "__main__":
-    # Token Opcional BRAPI (Pegue em brapi.dev caso bata limites de API)
-    token = os.getenv("BRAPI_TOKEN", None)
-    
-    df_proventos = buscar_proventos_brapi_lote(TICKERS_B3, token)
+    df_proventos = buscar_proventos_yfinance(TICKERS_B3)
     total_proventos = len(df_proventos)
 
     if total_proventos > 10:
@@ -355,4 +334,4 @@ if __name__ == "__main__":
             enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags=tags)
 
     else:
-        print("\nNenhum provento futuro encontrado para os tickers da lista (ou fora de dias úteis).")
+        print("\nNenhum provento futuro encontrado para os tickers da lista via Yahoo Finance.")
