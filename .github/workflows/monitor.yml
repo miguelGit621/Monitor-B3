@@ -1,0 +1,35 @@
+name: Monitor de Proventos Yahoo Finance
+
+on:
+  schedule:
+    # Executa todo dia às 06:00 AM (UTC-3). 
+    # O Cron usa UTC, então 11:00 UTC = 06:00 Brasília
+    - cron: '0 09 * * *'
+  # Permite executar manualmente para testes na aba Actions do GitHub
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas yfinance fpdf
+
+      - name: Executar script de proventos
+        env:
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python app.py
+          
