@@ -5,10 +5,10 @@ from pandas.tseries.offsets import BDay
 from fpdf import FPDF
 import yfinance as yf
 
-# --- COLOQUE SEU TÓPICO DO NTFY AQUI DIRETAMENTE ---
+# --- TÓPICO FIXO DO NTFY ---
 NTFY_TOPIC_FIXO = "Yeild_B3"
 
-# Lista de Tickers da B3 (adicionando o sufixo .SA para o Yahoo Finance)
+# Lista de Tickers da B3
 TICKERS_B3 = [
     "A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
     "ABCB4.SA", "ABCP11.SA", "ABEV3.SA", "ABTT34.SA", "ACCN34.SA", "ACNB34.SA",
@@ -149,13 +149,8 @@ TICKERS_B3 = [
 ]
 
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
-    """Envia uma notificação de texto simples para o ntfy.sh usando o tópico fixo."""
     url = f"https://ntfy.sh/{NTFY_TOPIC_FIXO}"
-
-    headers = {
-        "Title": titulo,
-        "Priority": prioridade
-    }
+    headers = {"Title": titulo, "Priority": prioridade}
     if tags:
         headers["Tags"] = tags
 
@@ -168,18 +163,14 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
         print(f"Erro ao enviar notificação para o ntfy: {e}")
         return False
 
-
 def enviar_pdf_ntfy(caminho_pdf, titulo):
-    """Envia um arquivo PDF como anexo para o ntfy.sh usando o tópico fixo."""
     url = f"https://ntfy.sh/{NTFY_TOPIC_FIXO}"
-
     headers = {
         "Title": titulo,
         "Filename": os.path.basename(caminho_pdf),
         "Priority": "high",
         "Tags": "file,chart_with_upwards_trend"
     }
-
     try:
         with open(caminho_pdf, "rb") as arquivo:
             response = requests.post(url, data=arquivo, headers=headers, timeout=30)
@@ -190,18 +181,13 @@ def enviar_pdf_ntfy(caminho_pdf, titulo):
         print(f"Erro ao enviar arquivo PDF para o ntfy: {e}")
         return False
 
-
 def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
-    """Gera um relatório em PDF destacando linhas em verde se DY > 1,30% (Dividendo Extraordinário)."""
     pdf = FPDF()
     pdf.add_page()
-    
-    # Cabeçalho
     pdf.set_font("Helvetica", style="B", size=16)
-    pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 10, "Resumo de Proventos Futuros (Antecipado)", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(5)
 
-    # Título das Colunas
     pdf.set_font("Helvetica", style="B", size=10)
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(35, 8, "Ticker", border=1, align="C", fill=True)
@@ -210,17 +196,16 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     pdf.cell(45, 8, "Valor (R$)", border=1, align="C", fill=True)
     pdf.cell(45, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
-    # Linhas da Tabela
     pdf.set_font("Helvetica", size=9)
     for _, row in df.iterrows():
         dy_valor = row['DY (%)']
         eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
 
         if eh_extraordinario:
-            pdf.set_fill_color(200, 247, 197)  # Verde claro para Dividendo Extraordinário
+            pdf.set_fill_color(200, 247, 197)
             dy_str = f"{dy_valor:.2f}% (Extra)"
         else:
-            pdf.set_fill_color(255, 255, 255)  # Branco padrão
+            pdf.set_fill_color(255, 255, 255)
             dy_str = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
 
         pdf.cell(35, 8, str(row["Ticker"]), border=1, align="C", fill=True)
@@ -232,12 +217,7 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     pdf.output(caminho_saida)
     return caminho_saida
 
-
 def buscar_proventos_yfinance(tickers):
-    """
-    Busca proventos utilizando exclusivamente a biblioteca yfinance.
-    Filtra datas EX e Pagamento para garantir que sejam em dias úteis (Seg-Sex).
-    """
     hoje = pd.Timestamp.today().normalize()
     proventos_futuros = []
 
@@ -246,13 +226,10 @@ def buscar_proventos_yfinance(tickers):
     for ticker in tickers:
         try:
             ativo = yf.Ticker(ticker)
-            
-            # Pega o histórico de dividendos do Yahoo Finance
             dividends = ativo.dividends
             if dividends is None or dividends.empty:
                 continue
 
-            # Pega o preço atual para calcular o DY estimado
             hist = ativo.history(period="1d")
             preco_atual = None
             if not hist.empty:
@@ -263,8 +240,13 @@ def buscar_proventos_yfinance(tickers):
                 data_ex = data_com_ts
                 data_pag = data_ex + BDay(15)
 
+                # Calcula quantos dias úteis faltam para a Data EX
                 if data_ex >= hoje:
-                    if data_ex.weekday() < 5 and data_pag.weekday() < 5:
+                    dias_uteis_ate_ex = len(pd.bdate_range(start=hoje, end=data_ex)) - 1
+
+                    # CONFIGURAÇÃO DE ANTECEDÊNCIA:
+                    # Avisa se a Data EX estiver entre hoje e os próximos 5 dias úteis
+                    if 0 <= dias_uteis_ate_ex <= 5:
                         dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
 
                         proventos_futuros.append({
@@ -275,48 +257,49 @@ def buscar_proventos_yfinance(tickers):
                             "Valor (R$)": float(valor),
                             "Preco Atual (R$)": float(preco_atual) if preco_atual else 0.0,
                             "DY (%)": dy,
+                            "Dias Ate EX": dias_uteis_ate_ex
                         })
         except Exception:
             continue
 
     return pd.DataFrame(proventos_futuros)
 
-
 if __name__ == "__main__":
     df_proventos = buscar_proventos_yfinance(TICKERS_B3)
     total_proventos = len(df_proventos)
 
     if total_proventos > 10:
-        print(f"\nDetectados {total_proventos} proventos (> 10). Gerando PDF...")
+        print(f"\nDetectados {total_proventos} proventos antecipados (> 10). Gerando PDF...")
         caminho_pdf = gerar_pdf_proventos(df_proventos)
-        
-        titulo_notificacao = f"Relatorio em PDF: {total_proventos} Proventos Encontrados"
-        enviar_pdf_ntfy(caminho_pdf, titulo=titulo_notificacao)
+        enviar_pdf_ntfy(caminho_pdf, titulo=f"Alerta Antecipado: {total_proventos} Proventos Próximos")
 
     elif total_proventos > 0:
-        print(f"\nDetectados {total_proventos} proventos (<= 10). Enviando notificações individuais...")
+        print(f"\nDetectados {total_proventos} proventos antecipados (<= 10). Enviando notificações...")
         for _, row in df_proventos.iterrows():
             dy_valor = row['DY (%)']
             eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
+            dias = row["Dias Ate EX"]
+            
+            aviso_tempo = "É HOJE!" if dias == 0 else f"Faltam {dias} dia(s) úteis"
 
-            titulo = f"{row['Tipo']}: {row['Ticker']}"
+            titulo = f"[{aviso_tempo}] {row['Tipo']}: {row['Ticker']}"
             if eh_extraordinario:
-                titulo += " [Dividendo Extraordinario]"
+                titulo += " [Extraordinário]"
 
             dy_texto = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
             if eh_extraordinario:
-                dy_texto += " (Extraordinario)"
+                dy_texto += " (Extraordinário)"
 
             mensagem = (
                 f"Ticker: {row['Ticker']}\n"
-                f"Data EX: {row['Data EX']}\n"
+                f"Data EX: {row['Data EX']} ({aviso_tempo})\n"
                 f"Pagamento: {row['Data Pagamento']}\n"
                 f"Valor: R$ {row['Valor (R$)']:.4f}\n"
                 f"DY Estimado: {dy_texto}"
             )
             
-            tags = "star,moneybag" if eh_extraordinario else "moneybag"
+            tags = "alarm_clock,moneybag" if dias <= 1 else "moneybag"
             enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags=tags)
 
     else:
-        print("\nNenhum provento futuro encontrado para os tickers da lista via Yahoo Finance.")
+        print("\nNenhum provento próximo para os próximos 5 dias úteis.")
